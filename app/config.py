@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings
 from functools import lru_cache
 
 class Settings(BaseSettings):
+    app_name: str = "MyApp"
     # Database
     DATABASE_URL: str
     PGVECTOR_DIM: int = 1024
@@ -24,6 +25,11 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
     BACKEND_URL: str = "http://127.0.0.1:8000"
     
+    google_client_id: str
+    google_client_secret: str
+    api_backend_domain: str
+    nextauth_url: str
+    nextauth_secret: str
 
     # JWT
     # JWT_SECRET_KEY: str

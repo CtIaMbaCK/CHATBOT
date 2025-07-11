@@ -7,7 +7,7 @@ from sqlalchemy.future import select
 
 from app.db.database import get_db
 from app.db.models.user_model import User
-from app.db.schemas.user_schema import ChangePasswordSchema, UserCreate, UserLogin, TokenResponse, UserOut
+from app.db.schemas.user_schema import ChangePasswordSchema, GoogleLoginRequest, UserCreate, UserLogin, TokenResponse, UserOut
 from app.services.auth_service import (
     create_access_token,
     get_current_user,
@@ -65,32 +65,41 @@ async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
     token = create_access_token({"user_id": str(new_user.id), "role": new_user.role})
     return TokenResponse(access_token=token, role=new_user.role)
 
-@router.post("/login", response_model=TokenResponse)
+
+@router.post("/login")
 async def login(user: UserLogin, db: AsyncSession = Depends(get_db)):
-    # Tìm người dùng theo email
     result = await db.execute(select(User).where(User.email == user.email))
     db_user = result.scalar_one_or_none()
 
-    # Kiểm tra mật khẩu thô (plaintext)
-    if not db_user or not verify_password(user.password, db_user.password):  # <-- sửa ở đây
+    if not db_user or not verify_password(user.password, db_user.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email hoặc mật khẩu không đúng"
         )
 
-    # Tạo JWT token
+    # ✅ Tạo JWT token
     token = create_access_token({
         "user_id": str(db_user.id),
         "role": db_user.role
     })
 
-    return TokenResponse(
-        access_token=token,
-        role=db_user.role,
-        force_password_change=db_user.force_password_change
+    # ✅ Trả về JSON + set cookie
+    response = JSONResponse(content={
+        "access_token": token,
+        "role": db_user.role,
+        "force_password_change": db_user.force_password_change
+    })
+
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        samesite="Lax",  # hoặc 'None' nếu dùng HTTPS
+        max_age=60 * 60 * 24 * 7,  # 7 ngày
+        secure=False  # Bật True nếu HTTPS
     )
 
-
+    return response
 
 @router.post("/logout", tags=["Auth"])
 async def logout(response: Response):
@@ -160,3 +169,56 @@ async def change_password(
     await db.commit()
 
     return {"message": "✅ Đổi mật khẩu thành công"}
+
+@router.post("/google")
+async def login_google(data: GoogleLoginRequest, db: AsyncSession = Depends(get_db)):
+    from google.oauth2 import id_token as google_id_token
+    from google.auth.transport import requests as google_requests
+
+    try:
+        id_info = google_id_token.verify_oauth2_token(
+            data.id_token, google_requests.Request()
+        )
+        email = id_info.get("email")
+        name = id_info.get("name", "")
+        if not email:
+            raise ValueError("Token không chứa email")
+    except Exception:
+        raise HTTPException(status_code=401, detail="id_token không hợp lệ")
+
+    # Tìm hoặc tạo người dùng
+    result = await db.execute(select(User).where(User.email == email))
+    db_user = result.scalar_one_or_none()
+
+    if not db_user:
+        db_user = User(
+            email=email,
+            full_name=name,
+            password="google-auth",  # bạn có thể để "string"
+            role="student",
+            force_password_change=False
+        )
+        db.add(db_user)
+        await db.commit()
+        await db.refresh(db_user)
+
+    # Tạo access token
+    token = create_access_token({
+        "user_id": str(db_user.id),
+        "role": db_user.role
+    })
+
+    response = JSONResponse(content={
+        "access_token": token,
+        "role": db_user.role,
+        "force_password_change": db_user.force_password_change
+    })
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        samesite="Lax",
+        max_age=60 * 60 * 24 * 7,
+        secure=False
+    )
+    return response

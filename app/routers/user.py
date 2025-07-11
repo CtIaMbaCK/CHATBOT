@@ -42,7 +42,7 @@ async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db)):
     await db.refresh(user)
 
     return {
-        "message": "✅ Tạo người dùng thành công",
+        "message": " Tạo người dùng thành công",
         "user": {
             "id": str(user.id),
             "email": user.email,
@@ -65,8 +65,7 @@ async def update_user(user_id: UUID, data: UserUpdate, db: AsyncSession = Depend
     user.role = data.role
 
     if data.password:  # Nếu có cập nhật mật khẩu
-        from app.core.security import hash_password
-        user.password = hash_password(data.password)
+        user.password = data.password  # Không mã hóa, dùng password trực tiếp
 
     await db.commit()
     await db.refresh(user)
@@ -89,4 +88,3 @@ async def protected_route(current_user: User = Depends(get_current_user)):
         "user_id": current_user.id,
         "role": current_user.role,
     }
-

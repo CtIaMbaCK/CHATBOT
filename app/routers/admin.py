@@ -1,4 +1,7 @@
-import select
+from collections import defaultdict
+import datetime
+from typing import List
+from sqlalchemy import select 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from app.db.database import get_db
@@ -8,11 +11,13 @@ import shutil
 import uuid
 import json
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from uuid import UUID
 from app.core.security import password
-from app.db.schemas.user_schema import UserUpdate
+from app.db.schemas.user_schema import UserOut, UserUpdate
+from app.db.models.chat_model import ChatHistory
+from app.core.dependencies import get_current_admin_user
 
-router = APIRouter(prefix="/admin")
+router = APIRouter(tags=["Admin"])
 
 DATA_PATH_ADMISSIONS = "data/admissions_20250623.json"
 DATA_PATH_STUDENTS = "data/students_20250623.json"
@@ -91,37 +96,91 @@ async def upload_pdf(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi ghi file: {str(e)}")
 
-@router.put("/update-user")
-async def update_user(data: UserUpdate, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == data.email))
-    user = result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
-
-    # Cập nhật các trường nếu có
-    user.full_name = data.full_name or user.full_name
-    user.role = data.role or user.role
-    user.email = data.email or user.email
-
-    # Cập nhật mật khẩu nếu có
-    if data.password:
-        user.password = password(data.password)  # ⚠️ dùng hàm password() thay vì hash
-
-    db.add(user)
-    await db.commit()
-
-    return {"message": "✅ Cập nhật người dùng thành công"}
-
-@router.delete("/{user_id}")
-async def delete_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+@router.put("/{user_id}")
+async def update_user(user_id: UUID, data: UserUpdate, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-
     if not user:
-        raise HTTPException(status_code=404, detail="User không tồn tại")
+        raise HTTPException(status_code=404, detail="Người dùng không tồn tại")
 
+    user.full_name = data.full_name or user.full_name
+    user.email = data.email or user.email
+    user.role = data.role or user.role
+    if data.password:
+        user.password = data.password
+
+    await db.commit()
+    await db.refresh(user)
+    return {"message": "Cập nhật thành công", "user": user}
+
+@router.delete("/{user_id}")
+async def delete_user(user_id: UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="Người dùng không tồn tại")
     await db.delete(user)
     await db.commit()
+    return {"message": f"Đã xoá người dùng: {user.email}"}
 
-    return {"message": f"Đã xóa người dùng: {user.email}"}
+
+@router.get("/all-users")
+async def get_all_users(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User))
+    users = result.scalars().all()
+    return users
+
+@router.get("/dashboard")
+def get_admin_dashboard(db: Session = Depends(get_db), admin_user=Depends(get_current_admin_user)):
+    # 1. Thống kê tổng quan
+    total_users = db.query(User).count()
+    total_students = db.query(User).filter(User.role == "student").count()
+    total_admins = db.query(User).filter(User.role == "admin").count()
+    latest_signup = db.query(User).order_by(User.created_at.desc()).first()
+
+    # 2. Thống kê đăng ký theo ngày (7 ngày gần nhất)
+    today = datetime.utcnow().date()
+    start_date = today - datetime.timedelta(days=6)
+    signup_by_day = (
+        db.query(User.created_at)
+        .filter(User.created_at >= start_date)
+        .all()
+    )
+
+    signup_counter = defaultdict(int)
+    for user in signup_by_day:
+        day = user.created_at.date().isoformat()
+        signup_counter[day] += 1
+
+    signup_result = [
+        {"date": (start_date + datetime.timedelta(days=i)).isoformat(), "count": signup_counter[(start_date + datetime.timedelta(days=i)).isoformat()]}
+        for i in range(7)
+    ]
+
+    # 3. Thống kê lượt hỏi chatbot theo ngày
+    chat_by_day = (
+        db.query(ChatHistory.timestamp)
+        .filter(ChatHistory.timestamp >= start_date)
+        .all()
+    )
+
+    chat_counter = defaultdict(int)
+    for chat in chat_by_day:
+        day = chat.timestamp.date().isoformat()
+        chat_counter[day] += 1
+
+    chat_result = [
+        {"date": (start_date + datetime.timedelta(days=i)).isoformat(), "questions": chat_counter[(start_date + datetime.timedelta(days=i)).isoformat()]}
+        for i in range(7)
+    ]
+
+    return {
+        "summary": {
+            "total_users": total_users,
+            "total_students": total_students,
+            "total_admins": total_admins,
+            "latest_signup": latest_signup.created_at.date().isoformat() if latest_signup else "N/A"
+        },
+        "signup_by_day": signup_result,
+        "chat_usage": chat_result
+    }

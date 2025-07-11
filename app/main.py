@@ -18,7 +18,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
 
-    allow_origins=["http://localhost:3000","http://127.0.0.1:8000","https://nigeria-jeffrey-feeling-wishing.trycloudflare.com",],
+    allow_origins=["http://localhost:3000","http://127.0.0.1:8000","https://have-suitable-resistance-fitted.trycloudflare.com",],
     # thay bằng link fe sau khi chạy cd frontend cloudflared tunnel --url http://localhost:3000, thay bằng link be sau kho chạy cloudflared tunnel --url http://127.0.0.1:8000
     allow_credentials=True,
     allow_methods=["*"],
@@ -28,7 +28,6 @@ app.include_router(auth.router, prefix="/auth", tags=["Auth"],)
 app.include_router(chat.router, prefix="/chat", tags=["Chat"])        
 app.include_router(user.router, prefix="/users", tags=["Users"])     
 app.include_router(admin.router, prefix="/admin",tags=["Admin"])
-
 
 @app.get("/", tags=["Health"])
 async def root():
